@@ -1,0 +1,2 @@
+http://coding-geek.com/how-shazam-works/
+https://kevinsprojects.wordpress.com/2014/12/13/short-time-fourier-transform-using-python-and-numpy/
