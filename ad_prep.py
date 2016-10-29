@@ -14,6 +14,8 @@ from scipy.fftpack import fft
 import matplotlib.pyplot as plt
 import scipy.io.wavfile
 from collections import deque
+import ad_utils
+import pickle
 
 def make_filter():        
    #rate 44100
@@ -90,7 +92,9 @@ def sfft(data, fs, callback,
             fig +=1
             
         if callback is not None:
-            xf = np.linspace(0.0, 1.0/(2.0*T), fft_size)
+            #We take binz index instead of binz freq
+            #xf = np.linspace(0.0, 1.0/(2.0*T), fft_size)
+            xf = range(fft_size)
             callback(i, xf, 1.0/fft_size * np.abs(spectrum[0:fft_size]))      
         
      
@@ -132,7 +136,9 @@ class PeakMaker:
             for i in xrange(len(power)):
                 if power[i] > mean * 3:
                     this.peaks_time.append(offset)
-                    this.peaks_hz.append(hz[i])
+                    this.peaks_hz.append(hz[i])                    
+        
+        
                     
     def get_spectogramm(this):
         df = pd.DataFrame()
@@ -144,10 +150,8 @@ class PeakMaker:
         
     
     
-def make_signature():
-    rate,data = \
-        scipy.io.wavfile.read(
-          "/home/yonic/repos/adrid/data/milki_mono.wav")
+def make_spectogramm(fname):
+    rate,data = scipy.io.wavfile.read(fname)
     print rate, data.shape    
     data = data[0:44100*10]
     f = make_filter()
@@ -157,7 +161,7 @@ def make_signature():
     peak_maker = PeakMaker(window=10)
     sfft(data, 
         fs=rate, 
-        fft_size=1024, 
+        fft_size=512, 
         callback=peak_maker.handler)
     
     return peak_maker.get_spectogramm()
@@ -169,14 +173,165 @@ def make_coordinates(sp,signal_id):
     for i in xrange(0,len(sp)-8):
         anchor_hz = sp.hz.iloc[i]
         anchor_time = sp.time.iloc[i]
+        a = (anchor_time, signal_id)
         for j in range(i+3,i+3+5,1):
             p_hz = sp.hz.iloc[j]
             p_delta=np.abs(sp.time.iloc[j]-anchor_time)
             p = (anchor_hz,p_hz,p_delta)
-            a = (anchor_time, signal_id)
             coordintes.append((p,a))
             
     return coordintes
+    
+    
+def make_signature(
+    h,
+    index=1,
+    fname="/home/yonic/repos/adrid/data/milki_mono.wav"):
+    
+    sp = make_spectogramm(fname)    
+    coordinates = make_coordinates(sp,index)    
+    
+    for p,a in coordinates:
+        b = ad_utils.bf()        
+        b[0:13]  = p[0]
+        b[14:27] = p[1]
+        b[28:31] = p[2]
+
+        d = ad_utils.bf()
+        d[0:31] = a[0]
+        d[32:63] = a[1]
+
+        k = int(b)
+        if h.has_key(k):
+            h[k].append(int(d))
+        else:
+            h[k] = [int(d)]       
+        
+    return h
+    
+def __compare(song_sp, record_sp):
+    c = {}  
+    delta = {}
+    for k in record_sp.keys():        
+        if song_sp.has_key(k):
+            bf_r = ad_utils.bf(record_sp[k][0])
+            for a in song_sp[k]: 
+                bf_s = ad_utils.bf(a)
+                d = bf_s[0:31] - bf_r[0:31]                
+                if c.has_key(a):
+                    c[a] +=1
+                else:
+                    c[a] = 0
+
+                if delta.has_key(d):
+                    delta[d]+=1
+                else:
+                    delta[d]=0
+    
+    song_id = {}
+    for k in c.keys():
+        bf = ad_utils.bf(k)
+        time_offset = bf[0:31]
+        si = bf[32:63]        
+        if song_id.has_key(si):
+            song_id[si] += c[k]
+        else:
+            song_id[si] = c[k]
+    
+    return song_id, delta
+    
+    
+def compare(song_sp, record_sp):
+    c = {}  
+    delta = {}
+    for k in record_sp.keys():        
+        if song_sp.has_key(k):
+            bf_r = ad_utils.bf(record_sp[k][0])
+            for a in song_sp[k]: 
+                bf_s = ad_utils.bf(a)
+                d = bf_s[0:31] - bf_r[0:31]                
+                si = bf_s[32:63]
+                
+                if not c.has_key(si):
+                    c[si] =[d]
+                else:
+                    c[si].append(d) 
+    return c
+                
+    
+    
+def make_sp():
+    
+    fnames=[
+        "/home/yonic/repos/adrid/data/songs/ad_mono_1.wav",
+        "/home/yonic/repos/adrid/data/songs/ad_mono_2.wav",
+        "/home/yonic/repos/adrid/data/songs/ad_mono_3.wav",
+        "/home/yonic/repos/adrid/data/songs/ad_mono_4.wav"
+    ]
+    
+    index = 1
+    h = {}
+    for fname in fnames:
+        print index, fname
+        make_signature(h,index,fname)
+        index +=1
+        
+        
+    return h
+        
+        
+        
+                    
+        
+def test():    
+    fname="/home/yonic/repos/adrid/data/songs/sp.bin"
+    songs_sp = pickle.load(open(fname))
+    
+    def get_song_id_from_record(fname):
+    
+        record_sp = {}
+        make_signature(
+           record_sp,
+           index=100,
+           fname=fname)
+        
+        h = compare(songs_sp, record_sp)        
+        dist = [0]*10       
+        for k in h.keys():
+            dist[k] = max(np.histogram(h[k])[0])
+            
+        song_id = np.argmax(dist)
+        return song_id
+        
+    import pandas as pd
+    
+    df = pd.DataFrame()            
+    for ad in range(1,4):
+        res  =[]
+        for record in range(10):
+            f = "ad_"+str(ad)+"_record_"+str(record)+".wav"
+            fname = "/home/yonic/repos/adrid/data/records/"+f
+            print fname
+            i = get_song_id_from_record(fname)
+            res.append(i)
+        df[ad] = pd.Series(res)
+        
+    return df
+            
+            
+            
+        
+        
+            
+    return dist
+            
+        
+
+        
+        
+    
+    
+    
             
       
 
